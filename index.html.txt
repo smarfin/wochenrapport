@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wochenrapport</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .day-entry {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+        }
+        .time-group {
+            display: flex;
+            gap: 10px;
+        }
+        .time-group div {
+            flex: 1;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        #signatureCanvas {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .total-hours {
+            font-weight: bold;
+            margin-top: 20px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+        @media print {
+            .no-print {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <form id="rapportForm">
+        <h2>Wochenrapport</h2>
+        
+        <div class="form-group">
+            <label>Name Temporärmitarbeiter:</label>
+            <input type="text" id="name" required>
+        </div>
+
+        <div class="form-group">
+            <label>Kalenderwoche:</label>
+            <input type="week" id="weekNumber" required onchange="updateDates()">
+        </div>
+
+        <div class="form-group">
+            <label>Kommission:</label>
+            <input type="text" id="commission" required>
+        </div>
+
+        <div id="dailyEntries">
+            <!-- Tageseinträge werden hier dynamisch eingefügt -->
+        </div>
+
+        <div class="total-hours">
+            Gesamtstunden: <span id="totalHours">0</span>
+        </div>
+
+        <div class="form-group">
+            <label>Spesen Total (CHF):</label>
+            <input type="number" id="totalExpenses" step="0.01" min="0">
+        </div>
+
+        <div class="form-group">
+            <label>Bemerkungen:</label>
+            <textarea id="notes" rows="3"></textarea>
+        </div>
+
+        <div class="form-group">
+            <label>Unterschrift Kunde:</label>
+            <canvas id="signatureCanvas" width="560" height="200"></canvas>
+        </div>
+
+        <div class="form-group no-print">
+            <button type="button" onclick="clearSignature()">Unterschrift löschen</button>
+            <button type="button" onclick="generatePDF()">PDF erstellen</button>
+            <button type="button" onclick="sendEmail()">Per E-Mail senden</button>
+        </div>
+    </form>
+
+    <script>
+        // Funktion zum Erstellen der Tageseinträge
+        function createDailyEntries() {
+            const days = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+            const container = document.getElementById('dailyEntries');
+            container.innerHTML = '';
+
+            days.forEach(day => {
+                const dayDiv = document.createElement('div');
+                dayDiv.className = 'day-entry';
+                dayDiv.innerHTML = `
+                    <h3>${day}</h3>
+                    <div class="time-group">
+                        <div>
+                            <label>Von:</label>
+                            <input type="time" class="startTime" onchange="calculateHours()">
+                        </div>
+                        <div>
+                            <label>Bis:</label>
+                            <input type="time" class="endTime" onchange="calculateHours()">
+                        </div>
+                        <div>
+                            <label>Pause (Min):</label>
+                            <input type="number" class="breakTime" value="0" min="0" onchange="calculateHours()">
+                        </div>
+                        <div>
+                            <label>Stunden:</label>
+                            <input type="number" class="hours" readonly>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(dayDiv);
+            });
+        }
+
+        // Funktion zum Berechnen der Stunden
+        function calculateHours() {
+            let totalHours = 0;
+            const dayEntries = document.getElementsByClassName('day-entry');
+            
+            Array.from(dayEntries).forEach(day => {
+                const start = day.querySelector('.startTime').value;
+                const end = day.querySelector('.endTime').value;
+                const breakMinutes = parseInt(day.querySelector('.breakTime').value) || 0;
+                
+                if (start && end) {
+                    const startDate = new Date(`2000-01-01T${start}`);
+                    const endDate = new Date(`2000-01-01T${end}`);
+                    const diffHours = (endDate - startDate) / (1000 * 60 * 60) - (breakMinutes / 60);
+                    day.querySelector('.hours').value = diffHours.toFixed(2);
+                    totalHours += diffHours;
+                }
+            });
+            
+            document.getElementById('totalHours').textContent = totalHours.toFixed(2);
+        }
+
+        // Unterschrift-Funktionalität
+        const canvas = document.getElementById('signatureCanvas');
+        const ctx = canvas.getContext('2d');
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing);
+        canvas.addEventListener('touchstart', handleTouch);
+        canvas.addEventListener('touchmove', handleTouch);
+        canvas.addEventListener('touchend', stopDrawing);
+
+        function handleTouch(e) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            const mouseEvent = new MouseEvent(e.type === 'touchstart' ? 'mousedown' : 'mousemove', {
+                clientX: touch.clientX - rect.left,
+                clientY: touch.clientY - rect.top
+            });
+            canvas.dispatchEvent(mouseEvent);
+        }
+
+        function startDrawing(e) {
+            isDrawing = true;
+            [lastX, lastY] = [e.offsetX, e.offsetY];
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(e.offsetX, e.offsetY);
+            ctx.stroke();
+            [lastX, lastY] = [e.offsetX, e.offsetY];
+        }
+
+        function stopDrawing() {
+            isDrawing = false;
+        }
+
+        function clearSignature() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function generatePDF() {
+            const rapport = document.getElementById('rapportForm');
+            const options = {
+                margin: 1,
+                filename: 'Wochenrapport.pdf',
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { scale: 2 },
+                jsPDF: { unit: 'cm', format: 'a4', orientation: 'portrait' }
+            };
+
+            html2pdf().set(options).from(rapport).save();
+        }
+
+        function sendEmail() {
+            const formData = {
+                name: document.getElementById('name').value,
+                week: document.getElementById('weekNumber').value,
+                commission: document.getElementById('commission').value,
+                totalHours: document.getElementById('totalHours').textContent,
+                expenses: document.getElementById('totalExpenses').value,
+                notes: document.getElementById('notes').value
+            };
+
+            const mailtoLink = `mailto:?subject=Wochenrapport ${formData.name} - KW${formData.week}&body=Name: ${formData.name}%0D%0A
+Kalenderwoche: ${formData.week}%0D%0A
+Kommission: ${formData.commission}%0D%0A
+Gesamtstunden: ${formData.totalHours}%0D%0A
+Spesen: CHF ${formData.expenses}%0D%0A
+Bemerkungen: ${formData.notes}`;
+
+            window.location.href = mailtoLink;
+        }
+
+        // Initialisierung
+        createDailyEntries();
+    </script>
+</body>
+</html>
